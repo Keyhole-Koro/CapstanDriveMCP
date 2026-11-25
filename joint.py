@@ -284,6 +284,10 @@ class CapstanJoint:
         """Find the bottom stop without a limit switch and store it as the reference.
         Runs down at HOMING_VEL with the current limited to HOMING_CURRENT_A until the drum
         stalls on the stop, then turns the motor off."""
+        if not C.HOMING_ENABLED:
+            raise JointError("homing is disabled (it mistook a high-friction spot for the bottom stop); "
+                             "have the human put the drum on the bottom stop by hand and call set_bottom_here")
+
         def do():
             ax = self._axis
             ctl = ax.controller
@@ -292,6 +296,7 @@ class CapstanJoint:
             start, previous = ax.pos_estimate, self._bottom
             t0 = time.monotonic()
             stall_since = None
+            moving_peak_a = 0.0
             try:
                 cfg = ctl.config
                 cfg.control_mode = ControlMode.VELOCITY_CONTROL
@@ -330,13 +335,19 @@ class CapstanJoint:
                             break
                     else:
                         stall_since = None
+                        if abs(vel) > 0.1:
+                            moving_peak_a = max(moving_peak_a, abs(iq))
                     time.sleep(0.02)
             finally:
                 self._disarm(ax)  # stop pushing: motor off, runtime settings restored
             self._save_reference(pos)
             change = None if previous is None else round((pos - previous) * C.MOTOR_DIR_UP * DEG_PER_MOTOR_TURN, 2)
+            moving_s = (stall_since or now) - t0
             return {"homed": True, "travelled_down_deg": round(travelled * DEG_PER_MOTOR_TURN, 1),
-                    "time_s": round(time.monotonic() - t0, 1), "change_from_previous_reference_deg": change}
+                    "time_s": round(time.monotonic() - t0, 1),
+                    "avg_speed_deg_s": round(travelled * DEG_PER_MOTOR_TURN / moving_s, 1) if moving_s > 0 else None,
+                    "moving_peak_current_A": round(moving_peak_a, 2),
+                    "change_from_previous_reference_deg": change}
         result = self._call(do)
         return {**result, **self.status()}
 

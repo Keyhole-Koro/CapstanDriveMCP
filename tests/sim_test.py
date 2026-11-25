@@ -157,6 +157,7 @@ def check_restored(ax, label):
 
 
 def main():
+    C.HOMING_ENABLED = True  # the simulation exercises the homing logic itself
     tmp = Path(tempfile.mkdtemp())
     C.REFERENCE_FILE = tmp / "reference.json"
     plant = Plant()
@@ -188,6 +189,7 @@ def main():
     expect_error(lambda: j.move_to(110.0), "outside the allowed range")
     print("ok  move_by / range check")
 
+    tuned = C.POS_GAIN, C.VEL_GAIN, C.VEL_INTEGRATOR_GAIN
     C.POS_GAIN, C.VEL_GAIN, C.VEL_INTEGRATOR_GAIN = 35.0, 0.5, 2.5  # stiffer: settles tighter
     j.disable()
     check_restored(ax, "after disable")
@@ -195,7 +197,7 @@ def main():
     r = j.move_to(60.0)
     assert r["within_precision"], r
     print(f"ok  stiffer gains settle within 0.1 deg: error {r['error_deg']} deg in {r['time_s']} s")
-    C.POS_GAIN, C.VEL_GAIN, C.VEL_INTEGRATOR_GAIN = 20.0, 0.1667, 0.3333
+    C.POS_GAIN, C.VEL_GAIN, C.VEL_INTEGRATOR_GAIN = tuned
 
     plant.force_vel = 3.0  # runaway
     time.sleep(0.2)
