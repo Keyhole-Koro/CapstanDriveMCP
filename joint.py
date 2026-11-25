@@ -1,6 +1,8 @@
 """Safety-wrapped control of one capstan joint: ODrive S1 over USB.
 
 Callers work in drum degrees above the bottom end stop (0 = bottom, up = +).
+The bottom is set by hand: the human puts the drum on the bottom stop and
+set_bottom_here stores that position (valid until the ODrive restarts).
 Nothing is ever saved to the ODrive's flash: motion settings are applied at
 runtime, and the ODrive's saved limits (8 turns/s, 10 A) stay as a backstop.
 
@@ -8,16 +10,16 @@ While the motor is enabled:
   * targets outside [ANGLE_MIN, ANGLE_MAX] are rejected before anything moves
   * the ODrive enforces the runtime current / speed / trajectory limits (config.py)
   * a supervisor thread disarms on ODrive errors, leaving closed loop, leaving
-    the travel window, over-speed, or drift right after enabling
+    the travel window, over-speed, pushing on something, or drift right after enabling
   * the ODrive watchdog disarms the motor if this process stops feeding it
-Homing needs no limit switch: the drum runs down slowly with a low current
-limit until it stalls on the bottom stop; that position becomes the reference.
 """
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import math
+import statistics
 import threading
 import time
 
@@ -35,8 +37,7 @@ ANGLE_MIN = C.MARGIN_MOTOR_TURNS * DEG_PER_MOTOR_TURN
 ANGLE_MAX = TRAVEL_DEG - ANGLE_MIN
 BOOT_MATCH_TOL_S = 10.0  # a reference belongs to one ODrive boot (position resets to 0 at boot)
 # controller.config values changed at runtime and restored when the motor is turned off
-_CTL_KEYS = ("control_mode", "input_mode", "vel_limit", "vel_ramp_rate",
-             "pos_gain", "vel_gain", "vel_integrator_gain")
+_CTL_KEYS = ("control_mode", "input_mode", "vel_limit", "pos_gain", "vel_gain", "vel_integrator_gain")
 
 
 class JointError(RuntimeError):
@@ -177,8 +178,8 @@ class CapstanJoint:
         ax.watchdog_feed()
 
     def _disarm(self, ax):
-        """Motor off, then undo the runtime changes. The watchdog is switched off
-        only once the axis really is IDLE; otherwise it stays on and trips."""
+        """Motor off, then undo every runtime change. The watchdog is switched off only
+        once the axis really is IDLE; otherwise it stays on and trips."""
         ax.requested_state = AxisState.IDLE
         deadline = time.monotonic() + 1.0
         while ax.current_state != AxisState.IDLE:
@@ -198,13 +199,18 @@ class CapstanJoint:
             tt.vel_limit, tt.accel_limit, tt.decel_limit = o["trap"]
 
     def _supervise(self, ax, bottom: float, hold_pos: float, t_enable: float):
+        currents = collections.deque()  # (t, |Iq|) over the last OVERLOAD_S
         try:
             while not self._sup_stop.is_set():
                 ax.watchdog_feed()
                 state, err = ax.current_state, ax.active_errors
-                pos, vel = ax.pos_estimate, ax.vel_estimate
+                pos, vel, iq = ax.pos_estimate, ax.vel_estimate, ax.motor.foc.Iq_measured
                 if self._sup_stop.is_set():  # disable() is turning it off on purpose
                     break
+                now = time.monotonic()
+                currents.append((now, abs(iq)))
+                while now - currents[0][0] > C.OVERLOAD_S:
+                    currents.popleft()
                 ang = (pos - bottom) * C.MOTOR_DIR_UP * DEG_PER_MOTOR_TURN
                 reason = None
                 if err:
@@ -216,7 +222,11 @@ class CapstanJoint:
                     reason = f"drum left the travel window ({ang:.1f} deg)"
                 elif abs(vel) > C.VEL_ABORT:
                     reason = f"over-speed ({vel:+.2f} motor turns/s)"
-                elif (not self._moved_since_enable and time.monotonic() - t_enable < C.ENABLE_HOLD_S
+                elif (now - currents[0][0] >= 0.9 * C.OVERLOAD_S
+                      and (load := statistics.median(i for _, i in currents)) >= C.OVERLOAD_A):
+                    reason = (f"pushing on something at {ang:.1f} deg (median {load:.1f} A for {C.OVERLOAD_S} s; "
+                              "free moves need less than 2.6 A)")
+                elif (not self._moved_since_enable and now - t_enable < C.ENABLE_HOLD_S
                       and abs(pos - hold_pos) > C.ENABLE_HOLD_TOL_TURNS):
                     reason = f"moved {pos - hold_pos:+.3f} motor turns right after enabling"
                 if reason:
@@ -271,85 +281,20 @@ class CapstanJoint:
         self._call(do)
 
     def set_bottom_here(self) -> dict:
+        """Store the current position as the bottom stop. The human must hold the drum on the
+        bottom stop; the motor must be off. Reports the shift from the previous reference of the
+        same ODrive boot, which should be small (a large one means the cable slipped)."""
         def do():
             ax = self._axis
-            self._require_idle(ax)
+            if self._enabled() or ax.current_state != AxisState.IDLE:
+                raise JointError("disable the motor first: the bottom can only be set while the motor is off")
             if abs(ax.vel_estimate) > 0.05:
-                raise JointError("the drum is moving; let it rest on the bottom stop")
-            self._save_reference(ax.pos_estimate)
-        self._call(do)
-        return self.status()
-
-    def home(self) -> dict:
-        """Find the bottom stop without a limit switch and store it as the reference.
-        Runs down at HOMING_VEL with the current limited to HOMING_CURRENT_A until the drum
-        stalls on the stop, then turns the motor off."""
-        if not C.HOMING_ENABLED:
-            raise JointError("homing is disabled (it mistook a high-friction spot for the bottom stop); "
-                             "have the human put the drum on the bottom stop by hand and call set_bottom_here")
-
-        def do():
-            ax = self._axis
-            ctl = ax.controller
-            self._require_idle(ax)
-            down = -C.MOTOR_DIR_UP  # sign of motor turns when the drum moves down
-            start, previous = ax.pos_estimate, self._bottom
-            t0 = time.monotonic()
-            stall_since = None
-            moving_peak_a = 0.0
-            try:
-                cfg = ctl.config
-                cfg.control_mode = ControlMode.VELOCITY_CONTROL
-                cfg.input_mode = InputMode.VEL_RAMP
-                cfg.vel_ramp_rate = 1.0
-                cfg.vel_limit = 1.0
-                cfg.vel_gain, cfg.vel_integrator_gain = C.VEL_GAIN, C.VEL_INTEGRATOR_GAIN
-                ax.config.motor.current_soft_max = C.HOMING_CURRENT_A
-                ctl.input_torque = 0.0
-                ctl.input_vel = 0.0
-                self._fault = None
-                self._arm(ax)
-                ctl.input_vel = down * C.HOMING_VEL
-                while True:
-                    ax.watchdog_feed()
-                    state, err = ax.current_state, ax.active_errors
-                    pos, vel, iq = ax.pos_estimate, ax.vel_estimate, ax.motor.foc.Iq_measured
-                    now = time.monotonic()
-                    if err or state != AxisState.CLOSED_LOOP_CONTROL:
-                        raise JointError(f"homing stopped by the ODrive: state {AxisState(state).name}, "
-                                         f"errors {error_names(err)}, disarm reason {error_names(ax.disarm_reason)}")
-                    travelled = (pos - start) * down  # + = downwards
-                    if travelled < -0.1:
-                        raise JointError("homing moved UP instead of down: check MOTOR_DIR_UP in config.py")
-                    if travelled > C.HOMING_MAX_TRAVEL:
-                        raise JointError(f"no bottom stop found within {C.HOMING_MAX_TRAVEL} motor turns "
-                                         "(is the cable slipping?)")
-                    if abs(vel) > 2 * C.HOMING_VEL:
-                        raise JointError(f"homing over-speed ({vel:+.2f} motor turns/s)")
-                    if now - t0 > C.HOMING_MAX_TRAVEL / C.HOMING_VEL + 5.0:
-                        raise JointError("homing timed out")
-                    if abs(vel) < C.HOMING_STALL_VEL and abs(iq) >= 0.9 * C.HOMING_CURRENT_A:
-                        if stall_since is None:
-                            stall_since = now
-                        if now - stall_since >= C.HOMING_STALL_S:
-                            break
-                    else:
-                        stall_since = None
-                        if abs(vel) > 0.1:
-                            moving_peak_a = max(moving_peak_a, abs(iq))
-                    time.sleep(0.02)
-            finally:
-                self._disarm(ax)  # stop pushing: motor off, runtime settings restored
+                raise JointError("the drum is moving; hold it still on the bottom stop")
+            pos, previous = ax.pos_estimate, self._bottom
             self._save_reference(pos)
-            change = None if previous is None else round((pos - previous) * C.MOTOR_DIR_UP * DEG_PER_MOTOR_TURN, 2)
-            moving_s = (stall_since or now) - t0
-            return {"homed": True, "travelled_down_deg": round(travelled * DEG_PER_MOTOR_TURN, 1),
-                    "time_s": round(time.monotonic() - t0, 1),
-                    "avg_speed_deg_s": round(travelled * DEG_PER_MOTOR_TURN / moving_s, 1) if moving_s > 0 else None,
-                    "moving_peak_current_A": round(moving_peak_a, 2),
-                    "change_from_previous_reference_deg": change}
-        result = self._call(do)
-        return {**result, **self.status()}
+            return None if previous is None else round((pos - previous) * C.MOTOR_DIR_UP * DEG_PER_MOTOR_TURN, 2)
+        change = self._call(do)
+        return {"change_from_previous_reference_deg": change, **self.status()}
 
     def enable(self) -> dict:
         def do():
@@ -358,14 +303,14 @@ class CapstanJoint:
             if self._enabled():
                 return
             if self._bottom is None:
-                raise JointError("no bottom reference for this ODrive boot: call home, or have the human put "
-                                 "the drum on the bottom stop by hand and call set_bottom_here")
+                raise JointError("no bottom reference for this ODrive boot: ask the human to hold the drum on "
+                                 "the bottom stop by hand, then call set_bottom_here")
             self._require_idle(ax)
             bottom, pos = self._bottom, ax.pos_estimate
             ang = self._deg(pos)
             if not -C.WINDOW_SLACK_DEG <= ang <= TRAVEL_DEG + C.WINDOW_SLACK_DEG:
                 raise JointError(f"the drum reads {ang:.1f} deg, outside the travel window, so the reference is "
-                                 "wrong: call home again")
+                                 "wrong: set it again with set_bottom_here")
             try:
                 cfg, tt = ctl.config, ax.trap_traj.config
                 cfg.control_mode = ControlMode.POSITION_CONTROL
@@ -444,7 +389,7 @@ class CapstanJoint:
     def move_by(self, delta_deg: float) -> dict:
         def current():
             if self._bottom is None:
-                raise JointError("no bottom reference: call home first")
+                raise JointError("no bottom reference: set it with set_bottom_here first")
             return self._deg(self._axis.pos_estimate)
         return self.move_to(self._call(current) + delta_deg)
 

@@ -26,12 +26,13 @@ TOP_SPEED = f"{C.MOVE_VEL * DEG_PER_MOTOR_TURN:.0f} deg/s"
 INSTRUCTIONS = f"""Operates one real capstan-driven joint (ODrive S1 + brushless motor, 8:1 drum).
 Positions are the drum angle in degrees above the bottom end stop: 0 = bottom, up = positive.
 Move targets must be within {RANGE}; speed is capped at {TOP_SPEED}.
-Typical flow: status -> (if not referenced: home) -> enable -> move_to / move_by -> disable when finished.
-The bottom reference is lost whenever the ODrive restarts; home finds it again by running the drum
-down slowly into the bottom stop with a low current (no limit switch needed).
-This moves real hardware: before the first home or enable in a conversation, confirm with the human
-that the joint is clear and watched. If anything looks wrong, call disable (the drum does not fall
-when the motor is off)."""
+Typical flow: status -> (if not referenced: ask the human to hold the drum on the bottom stop by
+hand, then set_bottom_here) -> enable -> move_to / move_by -> disable when finished.
+The bottom reference is lost whenever the ODrive restarts (it survives the 24 V supply being off
+while USB stays connected). Never try to find the stops by driving the motor into them.
+This moves real hardware: before the first enable in a conversation, confirm with the human that the
+joint is clear and watched. If anything looks wrong, call disable (the drum does not fall when the
+motor is off). The server turns the motor off by itself if it pushes on something."""
 
 server = MCPServer("capstan", instructions=INSTRUCTIONS)
 joint = CapstanJoint()
@@ -59,20 +60,13 @@ def status() -> dict:
     return joint.status()
 
 
-@server.tool(description=f"Find the bottom end stop and store it as angle 0. The drum runs DOWN at "
-                         f"{C.HOMING_VEL * DEG_PER_MOTOR_TURN:.1f} deg/s with the current limited to "
-                         f"{C.HOMING_CURRENT_A:.1f} A until it stalls on the stop, then the motor turns off. "
-                         "The motor must be disabled. Ask the human first: the drum will move.")
-@_guard
-def home() -> dict:
-    return joint.home()
-
-
 @server.tool()
 @_guard
 def set_bottom_here() -> dict:
-    """Alternative to home: declare the drum's current position as the bottom end stop (angle 0).
-    Only after the human has confirmed the drum is resting on the bottom stop. Motor must be disabled."""
+    """Store the drum's current position as the bottom end stop (angle 0). Call it only while the
+    human holds the drum on the bottom stop by hand; the motor must be disabled. Reports the shift
+    from the previous reference of the same ODrive boot: more than a few degrees means the cable
+    slipped, so tell the human."""
     return joint.set_bottom_here()
 
 

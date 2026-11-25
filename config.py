@@ -28,6 +28,8 @@ VEL_ABORT = 2.5              # disarm above this speed [motor turns/s]
 WINDOW_SLACK_DEG = 3.0       # disarm if the drum leaves [0 - slack, travel + slack]
 ENABLE_HOLD_TOL_TURNS = 0.03 # max drift allowed right after enabling [motor turns]
 ENABLE_HOLD_S = 0.5
+OVERLOAD_A = 3.5             # disarm when the median current over OVERLOAD_S reaches this: free moves
+OVERLOAD_S = 0.3             # need <= 2.54 A (measure_load.py), so this means pushing on something
 
 # ---- move_to ----------------------------------------------------------------
 ARRIVAL_TOL_DEG = 0.5        # must get this close, or the move fails and the motor is turned off [drum deg]
@@ -35,15 +37,11 @@ SETTLE_TIMEOUT_S = 2.0       # ... within the planned trajectory time plus this
 PRECISION_TOL_DEG = 0.1      # then wait for the drum to settle within this [drum deg] ...
 PRECISION_WAIT_S = 1.0       # ... for at most this long
 
-# ---- homing: find the bottom stop by running into it gently (no limit switch) --
-# Disabled: on 2026-11-25 it stopped ~17 deg above the bottom stop, where moving down needs
-# ~1.9 A, and stored that as the bottom. Re-enable only after it has been made robust.
-HOMING_ENABLED = False
-HOMING_VEL = 0.3             # [motor turns/s] (= 13.5 deg/s at the drum)
-HOMING_CURRENT_A = 2.0       # push on the stop with at most this current (stiction needs < 1 A)
-HOMING_MAX_TRAVEL = 3.0      # [motor turns] give up if no stop is found within this
-HOMING_STALL_VEL = 0.03      # [motor turns/s] the stop is found when slower than this ...
-HOMING_STALL_S = 0.5         # ... for this long while pushing with >= 90 % of HOMING_CURRENT_A
+# ---- referencing ---------------------------------------------------------------
+# The bottom is set by hand (set_bottom_here). Motor homing into the compliant stops was tried and
+# dropped on 2026-11-25: a friction spot was mistaken for the stop, and pushing on the stop with
+# the tuned gains made the drum chatter. For automatic homing, fit a limit switch and use the
+# ODrive's own homing instead.
 
 # ---- refuse to run if the ODrive's limits are already above these -----------
 MAX_SAVED_VEL_LIMIT = 8.0

@@ -82,6 +82,7 @@ class Plant:
         self.vel_cmd = 0.0
         self.force_vel = None  # test hook: the drum runs away
         self.invert = False    # test hook: motor turns the wrong way
+        self.spot = None       # test hook: (lo, hi, amps) the drum sticks there unless the limit exceeds amps
         threading.Thread(target=self._run, daemon=True).start()
 
     def clear_errors(self):
@@ -128,6 +129,8 @@ class Plant:
         if self.force_vel is not None:
             vel = self.force_vel
         iq = math.copysign(min(lim, 0.8), vel) if abs(vel) > 1e-4 else 0.1
+        if self.spot and self.spot[0] <= pos <= self.spot[1] and lim < self.spot[2] and abs(vel) > 1e-4:
+            vel, iq = 0.0, math.copysign(lim, vel)  # stuck, pushing with everything it is allowed
         new = pos + vel * dt
         if new >= self.bottom:
             new, vel, iq = self.bottom, 0.0, lim
@@ -157,7 +160,6 @@ def check_restored(ax, label):
 
 
 def main():
-    C.HOMING_ENABLED = True  # the simulation exercises the homing logic itself
     tmp = Path(tempfile.mkdtemp())
     C.REFERENCE_FILE = tmp / "reference.json"
     plant = Plant()
@@ -171,12 +173,15 @@ def main():
     expect_error(j.enable, "no bottom reference")
     print("ok  status / enable refused without reference")
 
-    r = j.home()
-    assert r["homed"] and abs(ax.pos_estimate - plant.bottom) < 1e-6
-    assert abs(r["travelled_down_deg"] - plant.bottom * J.DEG_PER_MOTOR_TURN) < 0.5, r
-    assert s != r and r["referenced"] and abs(r["angle_deg"]) < 0.01
-    check_restored(ax, "after home")
-    print(f"ok  home: found the stop after {r['travelled_down_deg']} deg in {r['time_s']} s, settings restored")
+    ax.pos_estimate = plant.bottom  # the human holds the drum on the bottom stop
+    r = j.set_bottom_here()
+    assert r["referenced"] and abs(r["angle_deg"]) < 0.01 and r["change_from_previous_reference_deg"] is None, r
+    ax.pos_estimate = plant.bottom - 0.02  # the same again, 0.9 deg higher
+    r = j.set_bottom_here()
+    assert abs(r["change_from_previous_reference_deg"] - 0.9) < 0.01, r
+    ax.pos_estimate = plant.bottom
+    j.set_bottom_here()
+    print("ok  set_bottom_here, and it reports the shift from the previous reference")
 
     j.enable()
     assert ax.current_state == CL and j._enabled()
@@ -217,14 +222,16 @@ def main():
     j.clear_errors()
     print("ok  watchdog turns the motor off when the server freezes; enable refused until clear_errors")
 
-    plant.invert = True
-    expect_error(j.home, "moved UP")
-    plant.invert = False
-    check_restored(ax, "after wrong-way homing")
-    plant.bottom, C.HOMING_MAX_TRAVEL = 100.0, 0.3
-    expect_error(j.home, "no bottom stop")
-    check_restored(ax, "after homing without a stop")
-    print("ok  homing aborts on wrong direction / missing stop, settings restored")
+    j.enable()
+    here = ax.pos_estimate
+    plant.spot = (here - 0.05, here + 0.05, 10.0)  # something blocks the drum right here
+    t0 = time.monotonic()
+    expect_error(lambda: j.move_to(j._deg(here) + 10.0), "pushing on something")
+    stopped_after = time.monotonic() - t0
+    plant.spot = None
+    assert stopped_after < 0.6, stopped_after
+    check_restored(ax, "after the overload stop")
+    print(f"ok  overload: motor off {stopped_after:.2f} s after it started pushing ({j._fault})")
 
     assert j.release() == {"released": True} and j._odrv is None
     print("ok  release_usb")
