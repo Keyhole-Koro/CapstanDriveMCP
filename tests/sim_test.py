@@ -4,6 +4,7 @@ No USB access, nothing moves: odrive.find_sync is replaced by a simulated device
 and the reference file goes to a temporary directory.
 Run: .venv/bin/python tests/sim_test.py
 """
+import json
 import math
 import sys
 import tempfile
@@ -162,6 +163,7 @@ def check_restored(ax, label):
 def main():
     tmp = Path(tempfile.mkdtemp())
     C.REFERENCE_FILE = tmp / "reference.json"
+    C.TELEMETRY_DIR = tmp / "logs"
     plant = Plant()
     J.odrive.find_sync = lambda timeout=None: plant
     J.close_device_manager = lambda: None
@@ -193,6 +195,14 @@ def main():
     assert abs(r["target_deg"] - (50.0 + r["error_deg"] * 0 - 10.0)) < 1.0, r
     expect_error(lambda: j.move_to(110.0), "outside the allowed range")
     print("ok  move_by / range check")
+
+    r = j.go_home()
+    assert r["motor"] == "off" and r["target_deg"] == C.HOME_DEG and not j._enabled(), r
+    m = j.metrics()
+    assert m["moves_completed"] == 3 and m["moves_refused"] == 1 and m["moves_failed"] == 0, m
+    assert m["final_error_deg"]["max"] <= C.ARRIVAL_TOL_DEG and m["total_travel_deg"] > 50, m
+    print(f"ok  go_home parks at {r['reached_deg']} deg, motor off; metrics: {m['moves_completed']} moves, "
+          f"max error {m['final_error_deg']['max']} deg, travel {m['total_travel_deg']} deg")
 
     tuned = C.POS_GAIN, C.VEL_GAIN, C.VEL_INTEGRATOR_GAIN
     C.POS_GAIN, C.VEL_GAIN, C.VEL_INTEGRATOR_GAIN = 35.0, 0.5, 2.5  # stiffer: settles tighter
@@ -232,6 +242,14 @@ def main():
     assert stopped_after < 0.6, stopped_after
     check_restored(ax, "after the overload stop")
     print(f"ok  overload: motor off {stopped_after:.2f} s after it started pushing ({j._fault})")
+
+    log_file = next((tmp / "logs").glob("telemetry-*.jsonl"))
+    records = [json.loads(line) for line in log_file.read_text().splitlines()]
+    events = {r["name"] for r in records if r["kind"] == "event"}
+    samples = [r for r in records if r["kind"] == "sample"]
+    assert {"set_bottom", "enable", "move_to", "move_done", "move_refused", "disable", "fault"} <= events, events
+    assert samples and {"angle", "target", "vel", "current"} <= samples[0].keys(), samples[:1]
+    print(f"ok  telemetry: {len(samples)} samples, events {sorted(events)}")
 
     assert j.release() == {"released": True} and j._odrv is None
     print("ok  release_usb")

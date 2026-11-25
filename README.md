@@ -67,10 +67,14 @@ claude mcp add capstan -- "$PWD/.venv/bin/python" "$PWD/server.py"
 | `set_bottom_here` | 手で下端に当てた位置を原点にする。前の原点とのずれも返す（大きければワイヤーの滑りを疑う） |
 | `enable` / `disable` | モーターON（その場で保持）/ OFF（すぐ脱力） |
 | `move_to` / `move_by` | 絶対角度 / 相対角度で動かす。止まるまで待ち、最終誤差を返す |
+| `go_home` | 原点の近く（6°）の待機位置に戻り、脱力する（0°は下端のストッパーそのもの） |
+| `metrics` | サーバー起動からの実績（移動回数、最終誤差の平均・95%値・最大、0.1°以内の割合、移動時間、最大電流と速度、総移動量）。動かない |
 | `clear_errors` | ODriveのエラーを解除する |
 | `release_usb` | USBを手放す（Web GUIや `odrivetool` を使うとき） |
 
-よくある流れ: `status` → （原点がなければ、人が下端に当てて押さえてから）`set_bottom_here` → `enable` → `move_to` → `disable`
+よくある流れ: `status` → （原点がなければ、人が下端に当てて押さえてから）`set_bottom_here` → `enable` → `move_to` → `go_home`
+
+動作の記録: モーターがONの間の角度・目標・速度・電流（約50 Hz）と、すべての操作が、時刻つきで `logs/telemetry-YYYYMMDD.jsonl` に書かれる（グラフや動画の作成用。gitの管理外）。
 
 ## 安全設計
 

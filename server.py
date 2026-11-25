@@ -27,7 +27,8 @@ INSTRUCTIONS = f"""Operates one real capstan-driven joint (ODrive S1 + brushless
 Positions are the drum angle in degrees above the bottom end stop: 0 = bottom, up = positive.
 Move targets must be within {RANGE}; speed is capped at {TOP_SPEED}.
 Typical flow: status -> (if not referenced: ask the human to hold the drum on the bottom stop by
-hand, then set_bottom_here) -> enable -> move_to / move_by -> disable when finished.
+hand, then set_bottom_here) -> enable -> move_to / move_by -> go_home (or disable) when finished.
+metrics reports accuracy and other figures since the server started.
 The bottom reference is lost whenever the ODrive restarts (it survives the 24 V supply being off
 while USB stays connected). Never try to find the stops by driving the motor into them.
 This moves real hardware: before the first enable in a conversation, confirm with the human that the
@@ -90,6 +91,23 @@ def move_to(angle_deg: float) -> dict:
 @_guard
 def move_by(delta_deg: float) -> dict:
     return joint.move_by(delta_deg)
+
+
+@server.tool(description=f"Move the drum to the home position ({C.HOME_DEG:.0f} deg, just above the bottom stop; "
+                         "0 deg is the stop itself) and then turn the motor off; turn_off=false keeps it on. "
+                         "The motor must be enabled.")
+@_guard
+def go_home(turn_off: bool = True) -> dict:
+    return joint.go_home(turn_off)
+
+
+@server.tool()
+@_guard
+def metrics() -> dict:
+    """Performance since the server started, without touching the hardware: moves completed /
+    failed / refused, supervisor stops, final position error (mean / p95 / max), share of moves
+    within 0.1 deg, move times, peak current and speed, total travel."""
+    return joint.metrics()
 
 
 @server.tool()

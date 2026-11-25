@@ -48,6 +48,27 @@ def error_names(mask: int) -> list[str]:
     return [e.name for e in ODriveError if mask & e.value]
 
 
+class Telemetry:
+    """Append-only JSON-lines log (wall-clock time) of samples taken while the motor is on and
+    of every command, so motion can be plotted or synced with a video later."""
+
+    def __init__(self, directory):
+        self._dir, self._file, self._lock = directory, None, threading.Lock()
+
+    def write(self, kind: str, **data):
+        if self._dir is None:
+            return
+        line = json.dumps({"t": round(time.time(), 4), "kind": kind, **data}, ensure_ascii=False)
+        with self._lock:
+            try:
+                if self._file is None:
+                    self._dir.mkdir(exist_ok=True)
+                    self._file = open(self._dir / time.strftime("telemetry-%Y%m%d.jsonl"), "a", buffering=1)
+                self._file.write(line + "\n")
+            except OSError:
+                log.exception("telemetry write failed")
+
+
 def trajectory_time(dist: float) -> float:
     """Duration [s] of a trapezoidal move of `dist` motor turns with the config limits."""
     v, a, d = C.MOVE_VEL, C.MOVE_ACCEL, C.MOVE_DECEL
@@ -67,8 +88,12 @@ class CapstanJoint:
         self._bottom = None             # motor turns at the bottom stop, this ODrive boot
         self._fault = None              # why the supervisor last disarmed
         self._moved_since_enable = False  # ends the post-enable drift check
+        self._target_deg = None         # last commanded angle, for the telemetry
         self._sup_thread = None
         self._sup_stop = threading.Event()
+        self.telemetry = Telemetry(C.TELEMETRY_DIR)
+        self._metrics = {"since": time.time(), "moves": 0, "failed": 0, "refused": 0, "faults": 0,
+                         "errors": [], "times": [], "peak_current": 0.0, "peak_speed": 0.0, "travel": 0.0}
 
     # ------------------------------------------------------------ connection
     def _connect(self):
@@ -212,6 +237,9 @@ class CapstanJoint:
                 while now - currents[0][0] > C.OVERLOAD_S:
                     currents.popleft()
                 ang = (pos - bottom) * C.MOTOR_DIR_UP * DEG_PER_MOTOR_TURN
+                self.telemetry.write("sample", angle=round(ang, 3), target=self._target_deg,
+                                     vel=round(vel * C.MOTOR_DIR_UP * DEG_PER_MOTOR_TURN, 2),
+                                     current=round(abs(iq), 3))
                 reason = None
                 if err:
                     reason = f"ODrive error {error_names(err)}"
@@ -231,7 +259,9 @@ class CapstanJoint:
                     reason = f"moved {pos - hold_pos:+.3f} motor turns right after enabling"
                 if reason:
                     self._fault = reason
+                    self._metrics["faults"] += 1
                     log.warning("supervisor disarming: %s", reason)
+                    self.telemetry.write("event", name="fault", reason=reason, angle=round(ang, 2))
                     self._disarm(ax)
                     return
                 time.sleep(C.SUPERVISOR_PERIOD_S)
@@ -294,6 +324,7 @@ class CapstanJoint:
             self._save_reference(pos)
             return None if previous is None else round((pos - previous) * C.MOTOR_DIR_UP * DEG_PER_MOTOR_TURN, 2)
         change = self._call(do)
+        self.telemetry.write("event", name="set_bottom", change_deg=change)
         return {"change_from_previous_reference_deg": change, **self.status()}
 
     def enable(self) -> dict:
@@ -332,6 +363,8 @@ class CapstanJoint:
                 raise
             self._sup_stop.clear()
             self._moved_since_enable = False
+            self._target_deg = round(ang, 3)
+            self.telemetry.write("event", name="enable", angle=round(ang, 2))
             self._sup_thread = threading.Thread(target=self._supervise, args=(ax, bottom, pos, time.monotonic()),
                                                 name="capstan-supervisor", daemon=True)
             self._sup_thread.start()
@@ -339,18 +372,65 @@ class CapstanJoint:
         return self.status()
 
     def move_to(self, angle_deg: float) -> dict:
+        m = self._metrics
         if not ANGLE_MIN <= angle_deg <= ANGLE_MAX:
+            m["refused"] += 1
+            self.telemetry.write("event", name="move_refused", target=angle_deg, reason="outside the allowed range")
             raise JointError(f"target {angle_deg:.1f} deg is outside the allowed range "
                              f"[{ANGLE_MIN:.1f}, {ANGLE_MAX:.1f}] deg")
+        try:
+            result = self._move_to(angle_deg)
+        except JointError as e:
+            m["failed"] += 1
+            self.telemetry.write("event", name="move_failed", target=angle_deg, reason=str(e))
+            raise
+        m["moves"] += 1
+        m["errors"].append(abs(result["error_deg"]))
+        m["times"].append(result["time_s"])
+        m["peak_current"] = max(m["peak_current"], result["peak_current_A"])
+        m["peak_speed"] = max(m["peak_speed"], result["peak_speed_deg_s"])
+        m["travel"] += abs(result["target_deg"] - result["start_deg"])
+        self.telemetry.write("event", name="move_done", **result)
+        return result
 
+    def go_home(self, turn_off: bool = True) -> dict:
+        """Move to HOME_DEG (just above the bottom stop) and, by default, turn the motor off."""
+        result = self.move_to(C.HOME_DEG)
+        status = self.disable() if turn_off else self.status()
+        return {**result, "motor": "off" if turn_off else "on", "angle_deg": status["angle_deg"]}
+
+    def metrics(self) -> dict:
+        """Performance since this object was created. Read-only, needs no connection."""
+        m = self._metrics
+        errors = sorted(m["errors"])
+        return {
+            "since": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(m["since"])),
+            "moves_completed": m["moves"], "moves_failed": m["failed"], "moves_refused": m["refused"],
+            "supervisor_stops": m["faults"],
+            "final_error_deg": None if not errors else {
+                "mean": round(statistics.mean(errors), 3),
+                "p95": round(errors[min(len(errors) - 1, int(0.95 * len(errors)))], 3),
+                "max": round(errors[-1], 3)},
+            "within_precision_pct": None if not errors else
+                round(100 * sum(e <= C.PRECISION_TOL_DEG for e in errors) / len(errors), 1),
+            "move_time_s": None if not m["times"] else {
+                "mean": round(statistics.mean(m["times"]), 2), "max": round(max(m["times"]), 2)},
+            "peak_current_A": m["peak_current"], "peak_speed_deg_s": m["peak_speed"],
+            "total_travel_deg": round(m["travel"], 1),
+        }
+
+    def _move_to(self, angle_deg: float) -> dict:
         def do():
             if not self._enabled():
                 raise JointError("the motor is not enabled; call enable first"
                                  + (f" (last stop: {self._fault})" if self._fault else ""))
             ax, ctl = self._axis, self._axis.controller
             target = self._motor(angle_deg)
+            start_deg = self._deg(ax.pos_estimate)
             fail_at = time.monotonic() + trajectory_time(abs(target - ax.pos_estimate)) + C.SETTLE_TIMEOUT_S
             self._moved_since_enable = True  # set before commanding, so the drift check never sees the move
+            self._target_deg = round(angle_deg, 3)
+            self.telemetry.write("event", name="move_to", target=round(angle_deg, 3))
             ctl.input_pos = target
             t0 = time.monotonic()
             arrived_at = in_tol_since = None
@@ -380,7 +460,8 @@ class CapstanJoint:
                         in_tol_since = None
                     if now - arrived_at >= C.PRECISION_WAIT_S:
                         break
-            return {"target_deg": round(angle_deg, 2), "reached_deg": round(angle_deg + err, 2),
+            return {"start_deg": round(start_deg, 2), "target_deg": round(angle_deg, 2),
+                    "reached_deg": round(angle_deg + err, 2),
                     "error_deg": round(err, 2), "within_precision": abs(err) <= C.PRECISION_TOL_DEG,
                     "time_s": round(now - t0, 2), "peak_current_A": round(peak_a, 2),
                     "peak_speed_deg_s": round(peak_v * DEG_PER_MOTOR_TURN, 1)}
@@ -406,7 +487,9 @@ class CapstanJoint:
         if self._sup_thread is not None:
             self._sup_thread.join(timeout=1.0)
         self._call(lambda: self._disarm(self._axis))
-        return self.status()
+        status = self.status()
+        self.telemetry.write("event", name="disable", angle=status["angle_deg"])
+        return status
 
     def clear_errors(self) -> dict:
         def do():

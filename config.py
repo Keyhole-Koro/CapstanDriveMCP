@@ -31,6 +31,8 @@ ENABLE_HOLD_S = 0.5
 OVERLOAD_A = 3.5             # disarm when the median current over OVERLOAD_S reaches this: free moves
 OVERLOAD_S = 0.3             # need <= 2.54 A (measure_load.py), so this means pushing on something
 
+HOME_DEG = 6.0               # go_home parks here: just inside the allowed range above the bottom stop
+
 # ---- move_to ----------------------------------------------------------------
 ARRIVAL_TOL_DEG = 0.5        # must get this close, or the move fails and the motor is turned off [drum deg]
 SETTLE_TIMEOUT_S = 2.0       # ... within the planned trajectory time plus this
@@ -48,3 +50,4 @@ MAX_SAVED_VEL_LIMIT = 8.0
 MAX_SAVED_CURRENT_A = 10.0
 
 REFERENCE_FILE = Path(__file__).with_name("reference.json")
+TELEMETRY_DIR = Path(__file__).with_name("logs")  # JSON-lines motion log (plots, videos); None = off
