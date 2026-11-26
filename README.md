@@ -86,7 +86,7 @@ Logging: while the motor is on, angle, target, velocity and current (about 50 Hz
 - ODrive watchdog: if the server stops, the motor turns off within 0.5 s (0.48 s measured on the hardware)
 - The reference becomes invalid at every ODrive boot, and nothing moves until it is set again
 - The top stop is computed (bottom + 2.47 turns of travel). After re-tensioning the cable or replacing parts, hold the drum on the top stop by hand and check it with `check_top_here`. If the gap between the top stop and the allowed maximum is less than 2.7° (half the margin), it asks for a re-measurement; if the top stop is below the allowed maximum, it returns UNSAFE
-- To automate referencing, fit limit switches at the stops and use the ODrive's built-in homing (driving the motor into the stops was abandoned; see "History" below)
+- To automate referencing, fit limit switches at the stops and use the ODrive's built-in homing (do not drive the motor into the stops to find them)
 
 ## Notes
 
@@ -99,10 +99,3 @@ Logging: while the motor is on, angle, target, velocity and current (about 50 Hz
 - Verified on the hardware: holding, watchdog stop, moves, refusal of out-of-range commands
 - Gains tuned (`tune_gains.py`): position 35 / velocity 0.5 / integrator 2.5. The final position error went from 0.4–0.5° with the ODrive defaults to within 0.03°
 - The bottom reference is set by hand (`set_bottom_here`)
-
-### History: why motor-driven homing was dropped
-
-- Searching for the bottom at 2 A mistook a high-friction spot about 17° above the bottom (about 1.9 A needed to move down) for the bottom
-- `measure_load.py` showed friction of 1.3–1.5 A near the bottom and 0.5–0.8 A in the middle, plus a force pulling toward the middle (about 0.5 A upward near the bottom, about 0.7 A downward near the top)
-- Raising the current to 4 A and searching both stops pushed into the compliant stop with the stiff tuned gains, and the drum chattered against the bottom stop for about 6 s (a grinding noise). A human cut the 24 V supply to stop it
-- So driving the motor into the stops was abandoned in favor of setting the reference by hand. The attempted implementations are in the git history
