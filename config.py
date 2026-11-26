@@ -8,6 +8,11 @@ MOTOR_DIR_UP = -1            # sign of ODrive motor turns when the drum moves UP
 TRAVEL_MOTOR_TURNS = 2.47    # bottom stop -> top stop, free travel. The stops are compliant: pushed hard
                              # by hand they gave 2.62 (2026-11-25), first contact was ~2.43-2.47.
 MARGIN_MOTOR_TURNS = 0.12    # commanded targets stay this far from each stop
+# check_top_here (drum held on the top stop by hand, motor off) judges the measured travel:
+TOP_CHECK_MIN_CLEARANCE_DEG = 2.7  # the top stop must be at least this far above the allowed maximum
+                                   # (half of the 5.4 deg margin)
+TOP_CHECK_LONG_DEG = 9.0     # more than this beyond the configured travel is suspicious (a hard push
+                             # gave +6.75 deg), e.g. the bottom reference is off or the drum is not on the stop
 
 # ---- motion settings, applied at runtime only (never saved to the ODrive) ---
 MOVE_VEL = 1.0               # trajectory top speed [motor turns/s]  (= 45 deg/s at the drum)

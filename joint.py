@@ -327,6 +327,43 @@ class CapstanJoint:
         self.telemetry.write("event", name="set_bottom", change_deg=change)
         return {"change_from_previous_reference_deg": change, **self.status()}
 
+    def check_top_here(self) -> dict:
+        """Read-only check of the travel. The human holds the drum on the top stop by hand with the
+        motor off; compares the measured bottom->top travel with config.TRAVEL_MOTOR_TURNS.
+        Nothing is stored and nothing moves."""
+        def do():
+            ax = self._axis
+            if self._bottom is None:
+                raise JointError("no bottom reference: set the bottom first (set_bottom_here)")
+            if self._enabled() or ax.current_state != AxisState.IDLE:
+                raise JointError("disable the motor first: the top can only be checked while the motor is off")
+            if abs(ax.vel_estimate) > 0.05:
+                raise JointError("the drum is moving; hold it still on the top stop")
+            return self._deg(ax.pos_estimate)
+        top = self._call(do)
+        clearance = top - ANGLE_MAX
+        if top > TRAVEL_DEG + C.TOP_CHECK_LONG_DEG:
+            verdict = ("longer than expected: the drum may not be on the top stop, or the bottom reference "
+                       "is off (cable slip?). Re-set the bottom by hand and check again")
+        elif clearance < 0:
+            verdict = ("UNSAFE: the top stop is below the allowed maximum. Do not move above "
+                       f"{top - C.TOP_CHECK_MIN_CLEARANCE_DEG:.1f} deg; re-measure the travel "
+                       "(measure_range.py) and lower TRAVEL_MOTOR_TURNS in config.py")
+        elif clearance < C.TOP_CHECK_MIN_CLEARANCE_DEG:
+            verdict = ("travel is shorter than configured and the margin is thin: re-measure the travel "
+                       "(measure_range.py) and update TRAVEL_MOTOR_TURNS in config.py")
+        else:
+            verdict = "ok"
+        r = {"ok": verdict == "ok", "verdict": verdict,
+             "measured_travel_deg": round(top, 2),
+             "measured_travel_motor_turns": round(top / DEG_PER_MOTOR_TURN, 3),
+             "configured_travel_deg": round(TRAVEL_DEG, 2),
+             "difference_deg": round(top - TRAVEL_DEG, 2),
+             "allowed_max_deg": round(ANGLE_MAX, 1),
+             "clearance_above_allowed_max_deg": round(clearance, 2)}
+        self.telemetry.write("event", name="check_top", travel_deg=r["measured_travel_deg"], ok=r["ok"])
+        return r
+
     def enable(self) -> dict:
         def do():
             ax = self._axis

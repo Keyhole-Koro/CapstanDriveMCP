@@ -73,6 +73,17 @@ def set_bottom_here() -> dict:
 
 @server.tool()
 @_guard
+def check_top_here() -> dict:
+    """Check the travel without moving anything or storing anything: call it while the human holds
+    the drum on the top stop by hand (motor disabled, bottom reference set). Compares the measured
+    bottom->top travel with the configured one and says whether the allowed range is still safely
+    below the top stop. Use it after mechanical changes (cable re-tensioned, stops or parts replaced)
+    or as an occasional check. If the verdict is not ok, tell the human and do not move above it."""
+    return joint.check_top_here()
+
+
+@server.tool()
+@_guard
 def enable() -> dict:
     """Turn the motor on and hold the current position. Needs the bottom reference."""
     return joint.enable()

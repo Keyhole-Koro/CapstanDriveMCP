@@ -185,6 +185,24 @@ def main():
     j.set_bottom_here()
     print("ok  set_bottom_here, and it reports the shift from the previous reference")
 
+    turn = 360.0 / C.GEAR_RATIO
+    def top_at(turns):  # the human holds the drum this many motor turns above the bottom
+        ax.pos_estimate = plant.bottom + C.MOTOR_DIR_UP * turns
+        return j.check_top_here()
+    r = top_at(C.TRAVEL_MOTOR_TURNS)
+    assert r["ok"] and abs(r["difference_deg"]) < 0.01, r
+    r = top_at(2.62)  # pushed hard into the compliant stop: still fine
+    assert r["ok"], r
+    r = top_at(C.TRAVEL_MOTOR_TURNS - 0.1)  # 4.5 deg shorter: margin too thin
+    assert not r["ok"] and "re-measure" in r["verdict"] and r["clearance_above_allowed_max_deg"] > 0, r
+    r = top_at(C.TRAVEL_MOTOR_TURNS - 0.2)  # top stop below the allowed maximum
+    assert not r["ok"] and r["verdict"].startswith("UNSAFE"), r
+    r = top_at(C.TRAVEL_MOTOR_TURNS + 0.3)  # far too long: reference suspicious
+    assert not r["ok"] and "longer than expected" in r["verdict"], r
+    ax.pos_estimate = plant.bottom
+    assert abs(r["difference_deg"] - 0.3 * turn) < 0.01, r
+    print("ok  check_top_here: ok / thin margin / unsafe / suspiciously long")
+
     j.enable()
     assert ax.current_state == CL and j._enabled()
     assert (ax.controller.config.pos_gain, ax.controller.config.vel_gain) == (C.POS_GAIN, C.VEL_GAIN)
@@ -247,7 +265,7 @@ def main():
     records = [json.loads(line) for line in log_file.read_text().splitlines()]
     events = {r["name"] for r in records if r["kind"] == "event"}
     samples = [r for r in records if r["kind"] == "sample"]
-    assert {"set_bottom", "enable", "move_to", "move_done", "move_refused", "disable", "fault"} <= events, events
+    assert {"set_bottom", "check_top", "enable", "move_to", "move_done", "move_refused", "disable", "fault"} <= events, events
     assert samples and {"angle", "target", "vel", "current"} <= samples[0].keys(), samples[:1]
     print(f"ok  telemetry: {len(samples)} samples, events {sorted(events)}")
 
