@@ -1,108 +1,108 @@
 # 26K66_CapstanDrive
 
-キャプスタン駆動の1関節を、PCからUSBでODrive S1を直接制御し、MCPサーバーとしてLLM（Claude Codeなど）から操作するためのコードです。
+Code for one capstan-driven joint. A PC drives the ODrive S1 directly over USB, and an MCP server lets an LLM (Claude Code, etc.) operate the joint.
 
-## ハードウェア
+## Hardware
 
-- ODrive S1（ファームウェア 0.6.11）、24 V電源 LRS-350-24、15 Aヒューズ、ブレーキ抵抗 2 Ω
-- モーター: EaglePower LA8308 KV90（極対数20）。位置はODrive基板上のエンコーダで測る
-- 減速: ピニオンから出力ドラムへ 8:1（キャプスタン）
-- 接続: PC と ODrive を USB-C で直結。当初のTeensy 4.1 + CAN構成は今は使っていない
+- ODrive S1 (firmware 0.6.11), 24 V supply LRS-350-24, 15 A fuse, 2 Ω brake resistor
+- Motor: EaglePower LA8308 KV90 (20 pole pairs). Position comes from the ODrive's onboard encoder
+- Reduction: 8:1 from the pinion to the output drum (capstan)
+- Connection: PC to ODrive over USB-C. The original Teensy 4.1 + CAN setup is not used for now
 
-## 機構の測定値（2026-11-25）
+## Measured mechanics (2026-11-25)
 
-- **向き**: モーターの+方向がドラムの「下」（`config.py` の `MOTOR_DIR_UP = -1`）
-- **可動範囲**: 端に当たり始めるまで約2.43〜2.47モーター回転（設定値は2.47）。端は柔らかく、手で強く押し込むと2.62回転まで動く
-- **負荷**: ほぼ摩擦だけ（ゆっくり動かすのに0.3〜1 A）。モーターを切ってもドラムは落ちない
-- **原点**: ODriveは起動のたびに位置を0にリセットする。そのため起動後に、ドラムを手で下端に当てて `set_bottom_here` で原点を設定する。USBがつながっていれば、24 Vを切っても原点は保たれる
+- **Direction**: + motor turns move the drum **down** (`MOTOR_DIR_UP = -1` in `config.py`)
+- **Travel**: about 2.43–2.47 motor turns until the stops are first touched (configured: 2.47). The stops are compliant: pushed hard by hand, the drum goes as far as 2.62 turns
+- **Load**: almost only friction (0.3–1 A to move slowly). The drum does not fall when the motor is off
+- **Reference**: the ODrive resets its position to 0 at every boot. After a boot, hold the drum on the bottom stop by hand and call `set_bottom_here`. The reference survives the 24 V supply being off as long as USB stays connected
 
-## ODriveに保存した設定の変更（2026-11-25）
+## Settings saved to the ODrive (2026-11-25)
 
-| 項目 | 変更前 | 変更後 |
+| Setting | Before | After |
 |---|---|---|
 | `axis0.controller.config.vel_limit` | 26 turns/s | 8 turns/s |
 | `axis0.config.motor.current_soft_max` | 20 A | 10 A |
-| `axis0.config.motor.torque_constant` | 0.0766（KV 108） | 0.0919（KV 90） |
+| `axis0.config.motor.torque_constant` | 0.0766 (KV 108) | 0.0919 (KV 90) |
 
-変更前と変更後の設定は `odrive_config/` に保存してある。`odrivetool restore-config <ファイル>` で戻せる。
+Backups of the configuration before and after the change are in `odrive_config/`. Restore one with `odrivetool restore-config <file>`.
 
-## ファイル
+## Files
 
-| ファイル | 内容 |
+| File | Contents |
 |---|---|
-| `config.py` | 機構の値と安全上の上限（ギア比、向き、可動範囲、速度、電流、ゲイン、原点合わせ） |
-| `joint.py` | 制御と安全装置の本体。角度は「下端からのドラム角度」で扱う |
-| `server.py` | MCPサーバー（stdio） |
-| `measure_range.py` | 手でドラムを動かして、向きと可動範囲を測る。モーターは動かさない |
-| `tune_gains.py` | ゲイン調整。**モーターが動く**ので `--i-am-watching` が必要 |
-| `measure_load.py` | 位置ごとに、動かすのに必要な電流（摩擦と負荷）を測る。**モーターが動く** |
-| `tests/sim_test.py` | 実機なしで `joint.py` を検証するシミュレーションテスト |
-| `odrive_config/` | ODriveの設定のバックアップ |
+| `config.py` | Mechanics and safety limits (gear ratio, direction, travel, speed, current, gains, reference checks) |
+| `joint.py` | Control and safety core. Angles are drum degrees above the bottom stop |
+| `server.py` | MCP server (stdio) |
+| `measure_range.py` | Measures direction and travel while you move the drum by hand. The motor does not move |
+| `tune_gains.py` | Gain tuning. **Moves the motor**, so it requires `--i-am-watching` |
+| `measure_load.py` | Measures the current needed to move at each position (friction and load). **Moves the motor** |
+| `tests/sim_test.py` | Hardware-free simulation test of `joint.py` |
+| `odrive_config/` | ODrive configuration backups |
 
-## セットアップ
+## Setup
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-# USBのアクセス権（Linux、最初の1回だけ）
+# USB access (Linux, once)
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="0d[0-9][0-9]", MODE="0666"' \
   | sudo tee /etc/udev/rules.d/91-odrive.rules
 sudo udevadm control --reload-rules && sudo udevadm trigger
 
-# Claude Code に登録
+# Register with Claude Code
 claude mcp add capstan -- "$PWD/.venv/bin/python" "$PWD/server.py"
 
-# 実機なしのテスト
+# Test without hardware
 .venv/bin/python tests/sim_test.py
 ```
 
-## MCPツール
+## MCP tools
 
-角度は下端からのドラム角度 [deg] で、上が+。指令できるのは 5.4〜105.8° の範囲。
+Angles are drum degrees above the bottom stop, up = +. Targets must be within 5.4–105.8°.
 
-| ツール | 動作 |
+| Tool | What it does |
 |---|---|
-| `status` | 状態を読む（動かない） |
-| `set_bottom_here` | 手で下端に当てた位置を原点にする。前の原点とのずれも返す（大きければワイヤーの滑りを疑う） |
-| `check_top_here` | 手で上端に当てて呼ぶと、実測の可動範囲を設定値（2.47回転）と比べて判定する。何も保存せず、動かない |
-| `enable` / `disable` | モーターON（その場で保持）/ OFF（すぐ脱力） |
-| `move_to` / `move_by` | 絶対角度 / 相対角度で動かす。止まるまで待ち、最終誤差を返す |
-| `go_home` | 原点の近く（6°）の待機位置に戻り、脱力する（0°は下端のストッパーそのもの） |
-| `metrics` | サーバー起動からの実績（移動回数、最終誤差の平均・95%値・最大、0.1°以内の割合、移動時間、最大電流と速度、総移動量）。動かない |
-| `clear_errors` | ODriveのエラーを解除する |
-| `release_usb` | USBを手放す（Web GUIや `odrivetool` を使うとき） |
+| `status` | Reads the state (nothing moves) |
+| `set_bottom_here` | Sets the reference at the position where a human holds the drum on the bottom stop. Also returns the shift from the previous reference (a large one suggests the cable slipped) |
+| `check_top_here` | Call it while a human holds the drum on the top stop: compares the measured travel with the configured one (2.47 turns) and gives a verdict. Stores nothing and moves nothing |
+| `enable` / `disable` | Motor on (holds where it is) / off (goes limp at once) |
+| `move_to` / `move_by` | Moves to an absolute / relative angle, waits until it settles and returns the final error |
+| `go_home` | Returns to the park position near the bottom (6°) and turns the motor off (0° is the bottom stop itself) |
+| `metrics` | Figures since the server started (moves, final error mean / 95th percentile / max, share within 0.1°, move times, peak current and speed, total travel). Nothing moves |
+| `clear_errors` | Clears the ODrive's error flags |
+| `release_usb` | Releases the USB connection (for the Web GUI or `odrivetool`) |
 
-よくある流れ: `status` → （原点がなければ、人が下端に当てて押さえてから）`set_bottom_here` → `enable` → `move_to` → `go_home`
+Typical flow: `status` → (if there is no reference, a human holds the drum on the bottom stop, then) `set_bottom_here` → `enable` → `move_to` → `go_home`
 
-動作の記録: モーターがONの間の角度・目標・速度・電流（約50 Hz）と、すべての操作が、時刻つきで `logs/telemetry-YYYYMMDD.jsonl` に書かれる（グラフや動画の作成用。gitの管理外）。
+Logging: while the motor is on, angle, target, velocity and current (about 50 Hz) and every operation are written with timestamps to `logs/telemetry-YYYYMMDD.jsonl` (for graphs and videos; not tracked by git).
 
-## 安全設計
+## Safety design
 
-- 速度は最大45°/s、電流は最大6 A。いずれも実行時にだけ設定し、ODriveには保存しない。ODriveに保存した8 turns/s・10 Aは最後の歯止め
-- 範囲外の目標は、動かす前に拒否する
-- 監視スレッド（約50 Hz）が、ODriveのエラー、閉ループからの離脱、可動範囲外、速度超過、ON直後のずれを見つけたら、すぐ脱力させる
-- **何かに当たったときの検出**: 0.3秒間の電流の中央値が3.5 A以上になったら脱力する。普段の移動では最大2.54 Aしか要らないので、押し付け続けることはない
-- ODriveのウォッチドッグ: サーバーが止まると0.5秒で自動的に脱力する（実機で0.48秒を確認）
-- 原点はODriveの起動ごとに無効になり、設定し直すまで動かせない
-- 上端は計算で決めている（下端 + 可動範囲 2.47回転）。ワイヤーを張り直したり部品を替えたりしたあとは、手で上端に当てて `check_top_here` で確かめる。上端と許される最大角度の間が2.7°（余裕の半分）より狭ければ測り直しを促し、最大角度より下なら UNSAFE を返す
-- 原点合わせを自動化したい場合は、下端にリミットスイッチを付けて、ODriveに元からある Homing 機能を使う（モーターで端を押す方式はやめた。下の「経緯」を参照）
+- Speed is capped at 45°/s and current at 6 A. Both are set at runtime only and never saved to the ODrive. The 8 turns/s and 10 A saved on the ODrive are the last line of defense
+- Out-of-range targets are refused before anything moves
+- A supervisor thread (about 50 Hz) turns the motor off as soon as it sees an ODrive error, a drop out of closed loop, a position outside the travel, over-speed, or drift right after enabling
+- **Detecting contact**: if the median current over 0.3 s reaches 3.5 A, the motor is turned off. Normal moves need at most 2.54 A, so it never keeps pushing
+- ODrive watchdog: if the server stops, the motor turns off within 0.5 s (0.48 s measured on the hardware)
+- The reference becomes invalid at every ODrive boot, and nothing moves until it is set again
+- The top stop is computed (bottom + 2.47 turns of travel). After re-tensioning the cable or replacing parts, hold the drum on the top stop by hand and check it with `check_top_here`. If the gap between the top stop and the allowed maximum is less than 2.7° (half the margin), it asks for a re-measurement; if the top stop is below the allowed maximum, it returns UNSAFE
+- To automate referencing, fit limit switches at the stops and use the ODrive's built-in homing (driving the motor into the stops was abandoned; see "History" below)
 
-## 注意
+## Notes
 
-- MCPサーバーがUSBを使っている間は、Web GUIからつながらない（`release_usb` で解放する）
-- 元のTeensy用サンプルコードは向きの前提が逆（+が上）なので使わない。下端に押し付けてしまう
-- モーターを動かすときは、必ず人が見ていて、24 V電源をすぐ切れる状態で
+- While the MCP server holds the USB connection, the Web GUI cannot connect (free it with `release_usb`)
+- The original Teensy sample code assumes the opposite direction (+ = up), so do not use it: it would drive into the bottom stop
+- Whenever the motor moves, someone must be watching and ready to cut the 24 V supply
 
-## 状況（2026-11-25）
+## Status (2026-11-25)
 
-- 実機で確認済み: 保持、ウォッチドッグによる停止、移動、範囲外指令の拒否
-- ゲイン調整済み（`tune_gains.py`）: 位置 35 / 速度 0.5 / 積分 2.5。止まる位置の誤差は、ODrive初期値での0.4〜0.5°から0.03°以内になった
-- 原点は手で合わせる（`set_bottom_here`）
+- Verified on the hardware: holding, watchdog stop, moves, refusal of out-of-range commands
+- Gains tuned (`tune_gains.py`): position 35 / velocity 0.5 / integrator 2.5. The final position error went from 0.4–0.5° with the ODrive defaults to within 0.03°
+- The bottom reference is set by hand (`set_bottom_here`)
 
-### 経緯: モーターで端を探す原点合わせをやめた理由
+### History: why motor-driven homing was dropped
 
-- 2 Aで下端を探したところ、下端の約17°上の摩擦の大きい場所（下へ動かすのに約1.9 A必要）を、下端と誤判定した
-- `measure_load.py` で測ると、摩擦は下端付近で1.3〜1.5 A、真ん中で0.5〜0.8 A。さらに、真ん中へ引き戻す向きの力もかかっていた（下端付近で上向き約0.5 A、上端付近で下向き約0.7 A）
-- 電流を4 Aに上げて両端を探す方式に変えたところ、調整した硬いゲインのまま柔らかい端に押し付けたため、下端で約6秒間振動した（「ゴゴゴ」という音）。人が24 Vを切って止めた
-- このため、モーターで端に押し付ける方式はやめ、手で合わせる方式にした。試した実装はgitの履歴に残っている
+- Searching for the bottom at 2 A mistook a high-friction spot about 17° above the bottom (about 1.9 A needed to move down) for the bottom
+- `measure_load.py` showed friction of 1.3–1.5 A near the bottom and 0.5–0.8 A in the middle, plus a force pulling toward the middle (about 0.5 A upward near the bottom, about 0.7 A downward near the top)
+- Raising the current to 4 A and searching both stops pushed into the compliant stop with the stiff tuned gains, and the drum chattered against the bottom stop for about 6 s (a grinding noise). A human cut the 24 V supply to stop it
+- So driving the motor into the stops was abandoned in favor of setting the reference by hand. The attempted implementations are in the git history
