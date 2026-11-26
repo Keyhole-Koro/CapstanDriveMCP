@@ -27,7 +27,7 @@ import odrive
 from odrive.device_manager import close_device_manager
 from odrive.enums import AxisState, ControlMode, InputMode, ODriveError
 
-import config as C
+from . import config as C
 
 log = logging.getLogger("capstan")
 
@@ -348,10 +348,10 @@ class CapstanJoint:
         elif clearance < 0:
             verdict = ("UNSAFE: the top stop is below the allowed maximum. Do not move above "
                        f"{top - C.TOP_CHECK_MIN_CLEARANCE_DEG:.1f} deg; re-measure the travel "
-                       "(measure_range.py) and lower TRAVEL_MOTOR_TURNS in config.py")
+                       "(scripts/measure_range.py) and lower TRAVEL_MOTOR_TURNS in src/capstan/config.py")
         elif clearance < C.TOP_CHECK_MIN_CLEARANCE_DEG:
             verdict = ("travel is shorter than configured and the margin is thin: re-measure the travel "
-                       "(measure_range.py) and update TRAVEL_MOTOR_TURNS in config.py")
+                       "(scripts/measure_range.py) and update TRAVEL_MOTOR_TURNS in src/capstan/config.py")
         else:
             verdict = "ok"
         r = {"ok": verdict == "ok", "verdict": verdict,

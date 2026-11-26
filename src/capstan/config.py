@@ -54,5 +54,7 @@ PRECISION_WAIT_S = 1.0       # ... for at most this long
 MAX_SAVED_VEL_LIMIT = 8.0
 MAX_SAVED_CURRENT_A = 10.0
 
-REFERENCE_FILE = Path(__file__).with_name("reference.json")
-TELEMETRY_DIR = Path(__file__).with_name("logs")  # JSON-lines motion log (plots, videos); None = off
+# Runtime data lives at the repository root (both are git-ignored).
+DATA_DIR = Path(__file__).resolve().parents[2]
+REFERENCE_FILE = DATA_DIR / "reference.json"
+TELEMETRY_DIR = DATA_DIR / "logs"  # JSON-lines motion log (plots, videos); None = off

@@ -6,17 +6,16 @@ Run: .venv/bin/python tests/sim_test.py
 """
 import json
 import math
-import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace as NS
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import config as C  # noqa: E402
-import joint as J  # noqa: E402
-from odrive.enums import AxisState, ControlMode, InputMode, ODriveError  # noqa: E402
+from odrive.enums import AxisState, ControlMode, InputMode, ODriveError
+
+from capstan import config as C
+from capstan import joint as J
 
 CL, IDLE = AxisState.CLOSED_LOOP_CONTROL, AxisState.IDLE
 

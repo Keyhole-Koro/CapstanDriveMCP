@@ -1,6 +1,6 @@
 """Measure the drum's direction and travel BY HAND. The motor is never driven.
 
-Run with the motor off (IDLE):  .venv/bin/python measure_range.py
+Run with the motor off (IDLE):  .venv/bin/python scripts/measure_range.py
 Then, by hand:
   1) push the drum slowly DOWN onto the bottom stop and hold it there ~2 s
   2) push it slowly UP onto the top stop and hold it there ~2 s
@@ -14,8 +14,8 @@ import csv
 import sys
 import time
 
-import config as C
-from joint import CapstanJoint
+from capstan import config as C
+from capstan.joint import CapstanJoint
 
 MIN_SPAN = 1.0      # [motor turns] both stops must be at least this far apart
 STILL_TOL = 0.005   # [motor turns]

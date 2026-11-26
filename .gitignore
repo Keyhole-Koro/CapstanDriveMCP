@@ -2,3 +2,4 @@
 __pycache__/
 reference.json
 logs/
+*.egg-info/

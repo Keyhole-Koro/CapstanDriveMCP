@@ -7,7 +7,7 @@ bin it prints the median current while moving down and while moving up, split in
   load      the part that does not depend on the direction (+ = pushes the drum up)
 
 Run only while somebody watches the joint with a hand near the 24 V switch:
-  .venv/bin/python measure_load.py --i-am-watching [--csv samples.csv]
+  .venv/bin/python scripts/measure_load.py --i-am-watching [--csv samples.csv]
 """
 import argparse
 import csv
@@ -16,8 +16,8 @@ import statistics
 import sys
 import time
 
-import config as C
-from joint import DEG_PER_MOTOR_TURN, CapstanJoint, JointError, trajectory_time
+from capstan import config as C
+from capstan.joint import DEG_PER_MOTOR_TURN, CapstanJoint, JointError, trajectory_time
 
 SWEEP_DEG_S = 10.0
 LOW, HIGH, END = 6.0, 100.0, 55.0

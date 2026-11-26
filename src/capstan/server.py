@@ -1,7 +1,7 @@
 """MCP server (stdio) that lets an LLM operate the capstan joint.
 
 Register with Claude Code:
-  claude mcp add capstan -- /home/kiho/Workspaces/26K66/.venv/bin/python /home/kiho/Workspaces/26K66/server.py
+  claude mcp add capstan -- "$PWD/.venv/bin/capstan-mcp"
 
 The server connects to the ODrive on the first tool call and keeps the USB
 connection until release_usb is called or the server exits.
@@ -13,8 +13,8 @@ import sys
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-import config as C
-from joint import ANGLE_MAX, ANGLE_MIN, DEG_PER_MOTOR_TURN, CapstanJoint, JointError
+from . import config as C
+from .joint import ANGLE_MAX, ANGLE_MIN, DEG_PER_MOTOR_TURN, CapstanJoint, JointError
 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s: %(message)s")
@@ -143,5 +143,9 @@ def release_usb() -> dict:
     return joint.release()
 
 
-if __name__ == "__main__":
+def main():
     server.run("stdio")
+
+
+if __name__ == "__main__":
+    main()

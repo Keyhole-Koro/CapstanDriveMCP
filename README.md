@@ -11,7 +11,7 @@ Code for one capstan-driven joint. A PC drives the ODrive S1 directly over USB, 
 
 ## Measured mechanics (2026-11-25)
 
-- **Direction**: + motor turns move the drum **down** (`MOTOR_DIR_UP = -1` in `config.py`)
+- **Direction**: + motor turns move the drum **down** (`MOTOR_DIR_UP = -1` in `src/capstan/config.py`)
 - **Travel**: about 2.43–2.47 motor turns until the stops are first touched (configured: 2.47). The stops are compliant: pushed hard by hand, the drum goes as far as 2.62 turns
 - **Load**: almost only friction (0.3–1 A to move slowly). The drum does not fall when the motor is off
 - **Reference**: the ODrive resets its position to 0 at every boot. After a boot, hold the drum on the bottom stop by hand and call `set_bottom_here`. The reference survives the 24 V supply being off as long as USB stays connected
@@ -26,24 +26,29 @@ Code for one capstan-driven joint. A PC drives the ODrive S1 directly over USB, 
 
 Backups of the configuration before and after the change are in `odrive_config/`. Restore one with `odrivetool restore-config <file>`.
 
-## Files
+## Layout
 
-| File | Contents |
-|---|---|
-| `config.py` | Mechanics and safety limits (gear ratio, direction, travel, speed, current, gains, reference checks) |
-| `joint.py` | Control and safety core. Angles are drum degrees above the bottom stop |
-| `server.py` | MCP server (stdio) |
-| `measure_range.py` | Measures direction and travel while you move the drum by hand. The motor does not move |
-| `tune_gains.py` | Gain tuning. **Moves the motor**, so it requires `--i-am-watching` |
-| `measure_load.py` | Measures the current needed to move at each position (friction and load). **Moves the motor** |
-| `tests/sim_test.py` | Hardware-free simulation test of `joint.py` |
-| `odrive_config/` | ODrive configuration backups |
+```
+src/capstan/         Python package
+  config.py          mechanics and safety limits (gear ratio, direction, travel, speed, current, gains, reference checks)
+  joint.py           control and safety core; angles are drum degrees above the bottom stop
+  server.py          MCP server (stdio), installed as the `capstan-mcp` command
+scripts/
+  measure_range.py   measures direction and travel while you move the drum by hand (the motor does not move)
+  tune_gains.py      gain tuning; MOVES THE MOTOR, requires --i-am-watching
+  measure_load.py    current needed to move at each position (friction and load); MOVES THE MOTOR
+tests/sim_test.py    hardware-free simulation test of joint.py
+odrive_config/       ODrive configuration backups
+pyproject.toml       package definition and dependencies
+reference.json       bottom reference of the current ODrive boot (runtime data, git-ignored)
+logs/                telemetry logs (runtime data, git-ignored)
+```
 
 ## Setup
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -e .
 
 # USB access (Linux, once)
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="0d[0-9][0-9]", MODE="0666"' \
@@ -51,7 +56,7 @@ echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="0d[0-9][0-9]",
 sudo udevadm control --reload-rules && sudo udevadm trigger
 
 # Register with Claude Code
-claude mcp add capstan -- "$PWD/.venv/bin/python" "$PWD/server.py"
+claude mcp add capstan -- "$PWD/.venv/bin/capstan-mcp"
 
 # Test without hardware
 .venv/bin/python tests/sim_test.py
@@ -97,5 +102,5 @@ Logging: while the motor is on, angle, target, velocity and current (about 50 Hz
 ## Status (2026-11-25)
 
 - Verified on the hardware: holding, watchdog stop, moves, refusal of out-of-range commands
-- Gains tuned (`tune_gains.py`): position 35 / velocity 0.5 / integrator 2.5. The final position error went from 0.4–0.5° with the ODrive defaults to within 0.03°
+- Gains tuned (`scripts/tune_gains.py`): position 35 / velocity 0.5 / integrator 2.5. The final position error went from 0.4–0.5° with the ODrive defaults to within 0.03°
 - The bottom reference is set by hand (`set_bottom_here`)

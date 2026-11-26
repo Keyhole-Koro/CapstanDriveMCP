@@ -10,7 +10,7 @@ It stops climbing at the first sign of oscillation, turns the motor off and
 names the last clean set. Nothing is saved: copy the chosen gains into config.py.
 
 Run only while somebody watches the joint with a hand near the 24 V switch:
-  .venv/bin/python tune_gains.py --i-am-watching
+  .venv/bin/python scripts/tune_gains.py --i-am-watching
 """
 import argparse
 import math
@@ -19,8 +19,8 @@ import statistics
 import sys
 import time
 
-import config as C
-from joint import ANGLE_MAX, ANGLE_MIN, CapstanJoint, JointError, trajectory_time
+from capstan import config as C
+from capstan.joint import ANGLE_MAX, ANGLE_MIN, CapstanJoint, JointError, trajectory_time
 
 LADDER = [  # (pos_gain, vel_gain [Nm/(turn/s)], vel_integrator_gain [Nm/turn])
     (20.0, 0.1667, 0.3333),  # ODrive defaults
